@@ -214,6 +214,25 @@ class HiggsAudioServeEngine:
         self.model = HiggsAudioModel.from_pretrained(model_name_or_path, torch_dtype=torch_dtype).to(device)
         logger.info(f"Loaded model from {model_name_or_path}, dtype: {self.model.dtype}")
 
+        # Torch compiling the model
+        config = torch._inductor.config
+        
+        config.conv_1x1_as_mm = True
+        config.epilogue_fusion = False
+        config.coordinate_descent_tuning = True
+        config.coordinate_descent_check_all_directions = True
+        
+        config.memory_planning = True
+        config.inplace_buffers = True
+        config.allow_buffer_reuse = True
+
+        config.cpp_wrapper = True
+        config.freezing = True
+
+        torch.set_float32_matmul_precision('high')
+        
+        self.model = torch.compile(self.model, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=False)
+
         if tokenizer_name_or_path is None:
             tokenizer_name_or_path = model_name_or_path
         logger.info(f"Loading tokenizer from {tokenizer_name_or_path}")
@@ -221,7 +240,7 @@ class HiggsAudioServeEngine:
 
         logger.info(f"Initializing Higgs Audio Tokenizer")
         self.audio_tokenizer = load_higgs_audio_tokenizer(audio_tokenizer_name_or_path, device=device)
-
+        
         self.audio_num_codebooks = self.model.config.audio_num_codebooks
         self.audio_codebook_size = self.model.config.audio_codebook_size
         self.audio_tokenizer_tps = self.audio_tokenizer.tps
@@ -302,6 +321,7 @@ class HiggsAudioServeEngine:
                 raw_audio = None
 
             if raw_audio is not None:
+                # with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
                 audio_ids = self.audio_tokenizer.encode(raw_audio, self.audio_tokenizer.sampling_rate)
                 audio_ids_l.append(audio_ids.squeeze(0).cpu())
 
